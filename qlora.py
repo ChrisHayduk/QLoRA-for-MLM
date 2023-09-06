@@ -299,16 +299,12 @@ def get_accelerate_model(args, checkpoint_dir):
         )
 
     
-    try:
-        # Attempt to prepare the model for k-bit training with the user-specified args
-        if not args.full_finetune:
-            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
-    except ValueError as e:
-        # Log the error for debugging or monitoring purposes
-        print(f"Caught ValueError: {e}. Retrying with use_gradient_checkpointing set to False.")
-        
-        # Retry the operation with use_gradient_checkpointing set to False
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+    if "esm" in args.model_name_or_path.lower():
+      args.gradient_checkpointing = False
+      print("Setting gradient checkpointing to false for ESM model")
+
+    if not args.full_finetune:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
 
     if not args.full_finetune:
@@ -538,6 +534,10 @@ def train():
     set_seed(args.seed)
 
     data_module = make_data_module(tokenizer=tokenizer, args=args)
+
+    if "esm" in args.model_name_or_path.lower():
+      args.gradient_checkpointing = False
+      training_args.gradient_checkpointing = False
     
     trainer = Trainer(
         model=model,
