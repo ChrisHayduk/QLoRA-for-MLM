@@ -298,12 +298,18 @@ def get_accelerate_model(args, checkpoint_dir):
             model=model,
         )
 
-    if not (hasattr(model, "gradient_checkpointing_enable") and callable(model.gradient_checkpointing_enable)):
-        args.gradient_checkpoint = False
-        print("Setting gradient checkpointing to False")
     
-    if not args.full_finetune:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+    try:
+        # Attempt to prepare the model for k-bit training with the user-specified args
+        if not args.full_finetune:
+            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+    except ValueError as e:
+        # Log the error for debugging or monitoring purposes
+        print(f"Caught ValueError: {e}. Retrying with use_gradient_checkpointing set to False.")
+        
+        # Retry the operation with use_gradient_checkpointing set to False
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+
 
     if not args.full_finetune:
         if checkpoint_dir is not None:
