@@ -30,7 +30,7 @@ from transformers import (
     BitsAndBytesConfig,
 
 )
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DatasetDict
 import evaluate
 
 from peft import (
@@ -172,7 +172,7 @@ class TrainingArguments(transformers.TrainingArguments):
     learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate'})
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
-    gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
+    gradient_checkpointing: bool = field(default=False, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
     do_train: bool = field(default=True, metadata={"help": 'To train or not to train, that is the question?'})
     lr_scheduler_type: str = field(default='constant', metadata={"help": 'Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis'})
     warmup_ratio: float = field(default=0.03, metadata={"help": 'Fraction of steps to do a warmup for'})
@@ -181,6 +181,7 @@ class TrainingArguments(transformers.TrainingArguments):
     save_strategy: str = field(default='steps', metadata={"help": 'When to save checkpoints'})
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
+    mask_prob: float = field(default=0.15, metadata={"help": 'Set the masking probability for MLM'})
 
 def find_all_linear_names(args, model):
     cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
@@ -298,7 +299,7 @@ def get_accelerate_model(args, checkpoint_dir):
         )
     
     if not args.full_finetune:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
 
     if not args.full_finetune:
         if checkpoint_dir is not None:
@@ -374,7 +375,7 @@ def smart_tokenizer_and_embedding_resize(
 class DataCollatorForMLM:
     tokenizer: PreTrainedTokenizer
     source_max_len: int
-    mask_probability: float  # Probability of masking a token
+    mask_probability: float
     
     def mask_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -383,22 +384,31 @@ class DataCollatorForMLM:
         mask = torch.full(input_ids.shape, False)
         probability_matrix = torch.full(input_ids.shape, self.mask_probability)
         
-        # We should only mask non-special tokens
-        special_tokens_mask = self.tokenizer.get_special_tokens_mask(input_ids.tolist(), already_has_special_tokens=True)
-        probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
+        # Get special tokens mask
+        special_tokens_mask = [
+            self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) 
+            for val in input_ids.tolist()
+        ]
+        special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
+        
+        probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
         
         masked_indices = torch.bernoulli(probability_matrix).bool()
         
-        # Apply the mask
-        input_ids[masked_indices] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
+        # Replace masked indices with mask_token_id
+        mask_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
+        input_ids[masked_indices] = mask_token_id
         
         return input_ids, masked_indices
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        # Extract sources
-        sources = [f"{self.tokenizer.bos_token}{example['input']}{self.tokenizer.eos_token}" for example in instances]
+        # Add bos and eos tokens to sources if they are defined in tokenizer
+        bos_token = self.tokenizer.bos_token or ""
+        eos_token = self.tokenizer.eos_token or ""
         
-        # Tokenize
+        sources = [f"{bos_token}{example['input']}{eos_token}" for example in instances]
+        
+        # Tokenize sources
         tokenized_sources = self.tokenizer(
             sources,
             max_length=self.source_max_len,
@@ -408,17 +418,16 @@ class DataCollatorForMLM:
             add_special_tokens=False,
         )
         
-        # Randomly mask tokens and create labels for MLM
-        input_ids, masked_indices = self.mask_tokens(tokenized_sources['input_ids'].clone())
-        labels = tokenized_sources['input_ids'].clone()
+        # Mask tokens and create labels
+        input_ids, masked_indices = self.mask_tokens(tokenized_sources["input_ids"].clone())
+        labels = tokenized_sources["input_ids"].clone()
         
-        # We only compute loss for the masked tokens
         labels[~masked_indices] = IGNORE_INDEX
         
         data_dict = {
-            'input_ids': input_ids,
-            'attention_mask': tokenized_sources['attention_mask'],
-            'labels': labels
+            "input_ids": input_ids,
+            "attention_mask": tokenized_sources["attention_mask"],
+            "labels": labels,
         }
         
         return data_dict
@@ -432,7 +441,7 @@ def local_dataset(dataset_name):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name, delimiter='\t'))
     else:
         try:
-            full_dataset = Dataset.load_from_disk(dataset_name)
+            full_dataset = DatasetDict.load_from_disk(dataset_name)
         except:
             raise ValueError(f"Unsupported dataset format: {dataset_name}")
 
@@ -440,9 +449,9 @@ def local_dataset(dataset_name):
 
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     def load_data(dataset_name):
-        if os.path.exists(dataset_name):
+        if os.path.exists(os.path.join(os.getcwd(), dataset_name)):
             try:
-                full_dataset = local_dataset(dataset_name)
+                full_dataset = local_dataset(os.path.join(os.getcwd(), dataset_name))
                 return full_dataset
             except:
                 raise ValueError(f"Error loading dataset from {dataset_name}")

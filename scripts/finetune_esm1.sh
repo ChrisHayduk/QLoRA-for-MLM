@@ -1,12 +1,13 @@
 python qlora.py \
     --model_name_or_path facebook/esm1b_t33_650M_UR50S \
+    --mask_prob 0.15 \
     --output_dir ./output \
-    --dataset example_dataset \
+    --dataset example-dataset \
     --do_train True \
     --do_eval False \
+    --do_predict False \
     --source_max_len 512 \
     --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 4 \
     --logging_steps 1 \
     --max_steps 10000 \
@@ -14,5 +15,4 @@ python qlora.py \
     --data_seed 42 \
     --save_steps 1000 \
     --save_total_limit 40 \
-    --evaluation_strategy steps \
-    --optim paged_adamw_32bit \
+    --optim paged_adamw_32bit 
