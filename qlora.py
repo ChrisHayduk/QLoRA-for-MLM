@@ -407,12 +407,8 @@ class DataCollatorForMLM:
         
         return input_ids, masked_indices
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        # Add bos and eos tokens to sources if they are defined in tokenizer
-        bos_token = self.tokenizer.bos_token or ""
-        eos_token = self.tokenizer.eos_token or ""
-        
-        sources = [f"{bos_token}{example['input']}{eos_token}" for example in instances]
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:        
+        sources = [example['input'] for example in instances]
         
         # Tokenize sources
         tokenized_sources = self.tokenizer(
@@ -421,7 +417,7 @@ class DataCollatorForMLM:
             truncation=True,
             padding="max_length",
             return_tensors="pt",
-            add_special_tokens=False,
+            add_special_tokens=True,
         )
         
         # Mask tokens and create labels
