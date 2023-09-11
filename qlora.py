@@ -182,6 +182,10 @@ class TrainingArguments(transformers.TrainingArguments):
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
     mask_prob: float = field(default=0.15, metadata={"help": 'Set the masking probability for MLM'})
+    sharded_ddp: bool = field(default=False)
+    ddp_timeout: int = field(default=7200)
+    ddp_find_unused_parameters: bool = field(default=False)
+    dataloader_num_workers: int = field(default=3)
 
 def find_all_linear_names(args, model):
     cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
@@ -534,6 +538,11 @@ def train():
     if "esm" in args.model_name_or_path.lower():
       args.gradient_checkpointing = False
       training_args.gradient_checkpointing = False
+
+    if torch.cuda.device_count() > 1:
+        # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
+        model.is_parallelizable = True
+        model.model_parallel = True
     
     trainer = Trainer(
         model=model,
