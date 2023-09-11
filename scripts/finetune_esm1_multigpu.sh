@@ -1,0 +1,21 @@
+accelerate launch --num_processes 3 qlora.py \
+    --model_name_or_path facebook/esm1b_t33_650M_UR50S \
+    --mask_prob 0.15 \
+    --output_dir ./output \
+    --dataset example-dataset \
+    --do_train True \
+    --do_eval False \
+    --do_predict False \
+    --source_max_len 512 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 4 \
+    --logging_steps 1 \
+    --max_steps 10000 \
+    --save_strategy steps \
+    --data_seed 42 \
+    --save_steps 1000 \
+    --save_total_limit 40 \
+    --optim paged_adamw_32bit \
+    --dataloader_num_workers 3 \
+    --sharded_ddp True \
+    --ddp_find_unused_parameters True
